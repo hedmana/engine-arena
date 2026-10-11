@@ -22,7 +22,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .layer(DefaultBodyLimit::max(MAX_UPLOAD + 64 * 1024))
 }
 
-struct ApiError(StatusCode, String);
+pub(super) struct ApiError(pub(super) StatusCode, pub(super) String);
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
