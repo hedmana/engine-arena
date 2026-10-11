@@ -7,6 +7,7 @@ use std::{
 
 use engine_arena::{
     analysis::{Analyzer, EngineOptions},
+    arena::Arena,
     engines::Registry,
     uci::Engine,
     web::{self, AppState},
@@ -15,6 +16,7 @@ use engine_arena::{
 const PORT: u16 = 7878;
 const WEB_DIST: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../web/dist");
 const ENGINES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../data/engines");
+const MATCHES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../data/matches");
 
 #[tokio::main]
 async fn main() {
@@ -28,7 +30,8 @@ async fn main() {
     let registry = Registry::open(Path::new(ENGINES_DIR), stockfish)
         .await
         .expect("open engine registry");
-    let app = web::router(AppState::new(analyzer, registry), WEB_DIST);
+    let arena = Arena::new(MATCHES_DIR.into()).expect("open match directory");
+    let app = web::router(AppState::new(analyzer, registry, arena), WEB_DIST);
 
     // Loopback only: this server executes engine code.
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, PORT));

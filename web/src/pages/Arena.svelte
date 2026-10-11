@@ -3,6 +3,7 @@
   import { cancelMatch, startMatch, type EngineEntry, type GameRecord } from '../lib/api'
   import type { ArenaFeed } from '../lib/arena.svelte'
   import Board from '../lib/Board.svelte'
+  import { eloDifference } from '../lib/elo'
   import { formatScore } from '../lib/eval'
 
   let {
@@ -32,6 +33,8 @@
   const lastEval = $derived(game?.moves.findLast((m) => m.eval)?.eval)
   const config: Config = $derived({ fen: feed.fen, lastMove: feed.lastMove, viewOnly: true, coordinates: false })
   const score = (i: 0 | 1) => (match ? match.wins[i] + match.draws / 2 : 0)
+  const elo = $derived(match && eloDifference(match.wins[0], match.draws, match.wins[1]))
+  const signed = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(0)}`
 
   // Clocks tick locally between moves and are corrected by every move event.
   $effect(() => {
@@ -94,9 +97,24 @@
           <strong>{score(0)} - {score(1)}</strong>
           <span>{match.engines[1].name}</span>
         </div>
+        <table class="results">
+          <thead><tr><th>Engine</th><th>Wins</th><th>Draws</th><th>Losses</th><th>Score</th></tr></thead>
+          <tbody>
+            {#each [0, 1] as const as i (i)}
+              <tr>
+                <td>{match.engines[i].name}</td>
+                <td>{match.wins[i]}</td>
+                <td>{match.draws}</td>
+                <td>{match.wins[1 - i]}</td>
+                <td>{score(i)} / {match.finished.length}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
         <div class="muted">
-          {match.wins[0]} wins, {match.draws} draws, {match.wins[1]} losses; game {match.finished.length + (game ? 1 : 0)} of {match.games}
-          ({match.status})
+          Elo difference: {elo ? `${signed(elo.elo)} ${elo.margin === undefined ? '(margin needs more games)' : `± ${elo.margin.toFixed(0)} (95%)`}` : 'n/a'};
+          game {match.finished.length + (game ? 1 : 0)} of {match.games} ({match.status})
+          {#if match.finished.length}<a href="/api/matches/{match.id}/pgn" download>Download PGN</a>{/if}
         </div>
         {#if running}<button onclick={() => act(cancelMatch)}>Cancel match</button>{/if}
       </header>
@@ -187,6 +205,14 @@
     max-height: calc(100vh - 5rem);
     box-sizing: border-box;
     overflow: hidden;
+  }
+  .results {
+    margin: 0.4rem 0;
+  }
+  .results td:not(:first-child),
+  .results th:not(:first-child) {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
   }
   .score {
     display: flex;

@@ -3,11 +3,11 @@ use std::sync::Arc;
 use axum::{
     Json, Router,
     extract::{
-        State,
+        Path, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    http::StatusCode,
-    response::Response,
+    http::{StatusCode, header},
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use tokio::sync::broadcast::error::RecvError;
@@ -19,6 +19,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/matches", post(start))
         .route("/api/matches/current", get(current).delete(cancel))
+        .route("/api/matches/{id}/pgn", get(pgn))
         .route("/ws/matches", get(events))
 }
 
@@ -56,6 +57,29 @@ async fn cancel(State(state): State<Arc<AppState>>) -> Result<StatusCode, ApiErr
     } else {
         Err(ApiError(StatusCode::NOT_FOUND, "no running match".into()))
     }
+}
+
+async fn pgn(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<u64>,
+) -> Result<Response, ApiError> {
+    let pgn = tokio::fs::read(state.arena.pgn_path(id))
+        .await
+        .map_err(|_| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                "no games saved for this match".into(),
+            )
+        })?;
+    let disposition = format!("attachment; filename=\"engine-arena-match-{id}.pgn\"");
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/x-chess-pgn".to_string()),
+            (header::CONTENT_DISPOSITION, disposition),
+        ],
+        pgn,
+    )
+        .into_response())
 }
 
 async fn events(upgrade: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> Response {
