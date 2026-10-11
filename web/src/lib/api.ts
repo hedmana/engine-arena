@@ -29,6 +29,7 @@ export interface GameRecord {
 
 export interface MatchState {
   id: number
+  date: string
   engines: [{ id: string; name: string }, { id: string; name: string }]
   baseMs: number
   incrementMs: number
