@@ -5,6 +5,10 @@ use std::{
     io,
     path::Path,
     process::Stdio,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -13,6 +17,7 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     process::{Child, ChildStdin, ChildStdout, Command},
     sync::mpsc,
+    task::JoinHandle,
     time::timeout,
 };
 
@@ -25,6 +30,8 @@ pub struct Engine {
     stdin: ChildStdin,
     lines: mpsc::UnboundedReceiver<String>,
     pgid: libc::pid_t,
+    watchdog: Option<JoinHandle<()>>,
+    over_memory: Arc<AtomicBool>,
     _child: Child,
 }
 
@@ -55,6 +62,8 @@ impl Engine {
             stdin: child.stdin.take().expect("stdin is piped"),
             lines,
             pgid,
+            watchdog: None,
+            over_memory: Arc::default(),
             _child: child,
         };
         engine.send("uci").await?;
@@ -102,6 +111,27 @@ impl Engine {
         .map_err(|_| timed_out("readyok"))?
     }
 
+    /// Kills the engine's process group once its resident memory exceeds `limit` bytes.
+    pub fn limit_memory(&mut self, limit: u64) {
+        let (pgid, over_memory) = (self.pgid, self.over_memory.clone());
+        self.watchdog = Some(tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_millis(500));
+            loop {
+                tick.tick().await;
+                if crate::memory::group_rss(pgid) > limit {
+                    over_memory.store(true, Ordering::Relaxed);
+                    // SAFETY: see `Drop`; the watchdog is aborted before the child can be reaped.
+                    unsafe { libc::killpg(pgid, libc::SIGKILL) };
+                    return;
+                }
+            }
+        }));
+    }
+
+    pub fn exceeded_memory(&self) -> bool {
+        self.over_memory.load(Ordering::Relaxed)
+    }
+
     pub(crate) async fn send(&mut self, command: &str) -> io::Result<()> {
         self.stdin
             .write_all(format!("{command}\n").as_bytes())
@@ -116,6 +146,9 @@ impl Engine {
 
 impl Drop for Engine {
     fn drop(&mut self) {
+        if let Some(watchdog) = &self.watchdog {
+            watchdog.abort();
+        }
         // SAFETY: killpg has no memory-safety preconditions. The child is reaped only
         // after this runs, so its pid (and pgid) cannot have been reused.
         unsafe { libc::killpg(self.pgid, libc::SIGKILL) };

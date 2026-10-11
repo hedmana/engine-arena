@@ -150,6 +150,33 @@ async fn stop_is_generation_scoped_and_configure_resumes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn pause_stops_search_and_resume_continues() {
+    let Some(engine) = stockfish(2, 64).await else {
+        return;
+    };
+    let analyzer = Analyzer::new(engine);
+    let mut snapshots = analyzer.subscribe();
+    analyzer.analyze(1, GamePosition::new(START, &[] as &[&str]).unwrap(), 1);
+    assert!(changes_within(&mut snapshots, SECOND).await);
+
+    analyzer.pause(true);
+    analyzer.analyze(2, GamePosition::new(START, &["d2d4"]).unwrap(), 1);
+    sleep(Duration::from_millis(50)).await;
+    snapshots.borrow_and_update();
+    assert!(
+        !changes_within(&mut snapshots, Duration::from_millis(300)).await,
+        "paused analyzer must not search"
+    );
+
+    analyzer.pause(false);
+    assert!(
+        changes_within(&mut snapshots, SECOND).await,
+        "resume must start the newest request"
+    );
+    assert_eq!(snapshots.borrow().generation, 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 #[ignore = "benchmark: cargo test --release -- --ignored --nocapture"]
 async fn nps_matches_standalone_stockfish() {
     const SEARCH: Duration = Duration::from_secs(5);
