@@ -1,5 +1,8 @@
+mod pgn;
+
 use std::{
     io,
+    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -13,6 +16,8 @@ use shakmaty::{
     zobrist::Zobrist64,
 };
 use tokio::{
+    fs,
+    io::AsyncWriteExt,
     sync::broadcast,
     task::JoinHandle,
     time::{Instant, timeout},
@@ -107,6 +112,14 @@ impl GameResult {
             Self::BlackWins
         }
     }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::WhiteWins => "1-0",
+            Self::BlackWins => "0-1",
+            Self::Draw => "1/2-1/2",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -186,6 +199,8 @@ pub enum Status {
 #[serde(rename_all = "camelCase")]
 pub struct MatchState {
     pub id: u64,
+    /// UTC date the match started, `YYYY.MM.DD`.
+    pub date: String,
     pub engines: [Participant; 2],
     pub base_ms: u64,
     pub increment_ms: u64,
@@ -397,33 +412,51 @@ pub enum ArenaError {
     Invalid(String),
 }
 
-/// Runs one match at a time and broadcasts its progress as JSON events.
+/// Runs one match at a time, broadcasts its progress as JSON events, and appends
+/// every finished game to `<dir>/<match id>.pgn`.
 pub struct Arena {
     state: Mutex<Option<MatchState>>,
     events: broadcast::Sender<Arc<str>>,
     task: Mutex<Option<JoinHandle<()>>>,
     ids: AtomicU64,
     openings: Vec<Vec<String>>,
+    dir: PathBuf,
 }
 
-impl Default for Arena {
-    fn default() -> Self {
+impl Arena {
+    /// Continues match ids after the highest saved match so PGN files are never overwritten.
+    pub fn new(dir: PathBuf) -> io::Result<Self> {
+        std::fs::create_dir_all(&dir)?;
+        let last = std::fs::read_dir(&dir)?
+            .filter_map(|e| {
+                e.ok()?
+                    .file_name()
+                    .to_str()?
+                    .strip_suffix(".pgn")?
+                    .parse::<u64>()
+                    .ok()
+            })
+            .max()
+            .unwrap_or(0);
         let openings = OPENINGS
             .lines()
             .filter(|l| !l.trim().is_empty())
             .map(|l| l.split_whitespace().map(Into::into).collect())
             .collect();
-        Self {
+        Ok(Self {
             state: Mutex::default(),
             events: broadcast::channel(1024).0,
             task: Mutex::default(),
-            ids: AtomicU64::new(0),
+            ids: AtomicU64::new(last),
             openings,
-        }
+            dir,
+        })
     }
-}
 
-impl Arena {
+    pub fn pgn_path(&self, id: u64) -> PathBuf {
+        self.dir.join(format!("{id}.pgn"))
+    }
+
     pub fn current(&self) -> Option<MatchState> {
         self.state.lock().expect("arena state").clone()
     }
@@ -460,6 +493,7 @@ impl Arena {
         let id = self.ids.fetch_add(1, Ordering::Relaxed) + 1;
         let state = MatchState {
             id,
+            date: pgn::today(),
             engines: entries.clone().map(|e| Participant {
                 id: e.id,
                 name: e.name,
@@ -606,6 +640,7 @@ impl Arena {
                 };
                 engines[loser] = None;
             }
+            let mut finished_pgn: Option<(u64, String)> = None;
             self.emit(|s| {
                 match result {
                     GameResult::WhiteWins => s.wins[white] += 1,
@@ -614,6 +649,7 @@ impl Arena {
                 }
                 let mut game = s.current.take().expect("game in progress");
                 (game.result, game.termination) = (Some(result), Some(termination));
+                finished_pgn = Some((s.id, pgn::game(s, &game)));
                 s.finished.push(game.clone());
                 Event::GameEnd {
                     game,
@@ -621,6 +657,11 @@ impl Arena {
                     draws: s.draws,
                 }
             });
+            if let Some((id, pgn)) = finished_pgn
+                && let Err(e) = append(&self.pgn_path(id), &pgn).await
+            {
+                tracing::error!("saving PGN: {e}");
+            }
         }
         self.emit(|s| {
             s.status = Status::Finished;
@@ -631,6 +672,16 @@ impl Arena {
             }
         });
     }
+}
+
+async fn append(path: &std::path::Path, text: &str) -> io::Result<()> {
+    fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .await?
+        .write_all(text.as_bytes())
+        .await
 }
 
 /// Starts the engine if needed and readies it for a new game; on failure it is dropped (killed).
@@ -697,7 +748,7 @@ mod tests {
 
     #[test]
     fn openings_are_legal() {
-        let arena = Arena::default();
+        let arena = Arena::new(std::env::temp_dir().join("engine-arena-openings-test")).unwrap();
         assert_eq!(arena.openings.len(), 40);
         for opening in &arena.openings {
             let mut referee = Referee::new(Chess::default(), 400);

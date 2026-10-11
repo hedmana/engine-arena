@@ -47,11 +47,11 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(analyzer: Option<Analyzer>, registry: Registry) -> Self {
+    pub fn new(analyzer: Option<Analyzer>, registry: Registry, arena: Arena) -> Self {
         Self {
             analyzer: analyzer.map(Arc::new),
             registry: Arc::new(registry),
-            arena: Arc::default(),
+            arena: Arc::new(arena),
             generations: AtomicU64::new(0),
         }
     }
