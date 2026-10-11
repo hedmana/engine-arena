@@ -1,13 +1,17 @@
 <script lang="ts">
   import type { Config } from 'chessground/config'
+  import type { DrawShape } from 'chessground/draw'
   import type { Key } from 'chessground/types'
   import { chessgroundDests } from 'chessops/compat'
   import { parseFen } from 'chessops/fen'
   import { parseSquare } from 'chessops/util'
   import Board from './lib/Board.svelte'
+  import { Engine } from './lib/engine.svelte'
+  import EnginePanel from './lib/EnginePanel.svelte'
+  import { whitePercent } from './lib/eval'
+  import EvalBar from './lib/EvalBar.svelte'
   import MoveList from './lib/MoveList.svelte'
   import { exportPgn, importPgn } from './lib/pgn'
-  import { AnalysisSocket } from './lib/socket'
   import { MoveTree, positionOf, type TreeNode } from './lib/tree'
 
   const ROLES = ['queen', 'knight', 'rook', 'bishop'] as const
@@ -25,11 +29,8 @@
   let text = $state('')
   let error = $state('')
 
-  const socket = new AnalysisSocket(
-    () => {},
-    (message) => (error = message),
-  )
-  $effect(() => () => socket.close())
+  const engine = new Engine()
+  $effect(() => () => engine.close())
 
   const position = $derived(positionOf(current))
   const config: Config = $derived.by(() => {
@@ -45,19 +46,48 @@
   })
 
   $effect(() =>
-    socket.analyze(
+    engine.analyze(
       tree.root.fen,
       MoveTree.path(current).map((n) => n.uci),
-      3,
+      current.fen,
     ),
   )
 
-  function play(uci: string) {
-    const parent = current
-    const count = parent.children.length
-    const node = tree.play(parent, uci)
-    if (!node) return void resets++
-    if (parent.children.length !== count) version++
+  const terminal = $derived(
+    position.isCheckmate() ? 'Checkmate' : position.isStalemate() ? 'Stalemate' : position.isInsufficientMaterial() ? 'Draw' : undefined,
+  )
+  const white = $derived.by(() => {
+    if (engine.enabled && engine.analysis) return whitePercent(engine.analysis.lines[0])
+    if (terminal === 'Checkmate') return position.turn === 'white' ? 0 : 100
+    return 50
+  })
+
+  // A string compares by value, so the arrows only re-render when the best moves change.
+  const bestMoves = $derived(engine.enabled ? (engine.analysis?.lines.map((l) => l.pvUci[0]).join(' ') ?? '') : '')
+  const shapes: DrawShape[] = $derived(
+    bestMoves
+      ? bestMoves.split(' ').map((uci, i) => ({
+          orig: uci.slice(0, 2) as Key,
+          dest: uci.slice(2, 4) as Key,
+          brush: i === 0 ? 'paleBlue' : 'paleGrey',
+          modifiers: { lineWidth: i === 0 ? 14 : 8 },
+        }))
+      : [],
+  )
+
+  /** Plays `moves` from the current node, reusing existing branches. */
+  function play(...moves: string[]) {
+    let node = current
+    let added = false
+    for (const uci of moves) {
+      const count = node.children.length
+      const next = tree.play(node, uci)
+      if (!next) break
+      added ||= node.children.length !== count
+      node = next
+    }
+    if (node === current) resets++
+    if (added) version++
     current = node
   }
 
@@ -148,8 +178,9 @@
 <svelte:window {onkeydown} />
 
 <main>
+  <EvalBar {white} {orientation} />
   <section class="board">
-    <Board {config} {onmove} />
+    <Board {config} {shapes} {onmove} />
     {#if promotion}
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
       <div class="promotion cg-wrap" onclick={() => choosePromotion()}>
@@ -165,6 +196,7 @@
   </section>
 
   <aside>
+    <EnginePanel {engine} whiteToMove={position.turn === 'white'} fullmoves={position.fullmoves} {terminal} onplay={(moves) => play(...moves)} />
     <div class="toolbar">
       <button onclick={() => (current = tree.root)} title="Start (Home)">|&lt;</button>
       <button onclick={() => (current = current.parent ?? current)} title="Back (Left)">&lt;</button>
@@ -192,7 +224,7 @@
 <style>
   main {
     display: grid;
-    grid-template-columns: minmax(0, min(calc(100vh - 2rem), 720px)) minmax(280px, 420px);
+    grid-template-columns: 14px minmax(0, min(calc(100vh - 2rem), 720px)) minmax(300px, 440px);
     gap: 1rem;
     padding: 1rem;
     justify-content: center;
@@ -277,7 +309,10 @@
   }
   @media (max-width: 760px) {
     main {
-      grid-template-columns: minmax(0, 1fr);
+      grid-template-columns: 14px minmax(0, 1fr);
+    }
+    aside {
+      grid-column: 1 / -1;
     }
   }
 </style>
