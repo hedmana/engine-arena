@@ -11,8 +11,8 @@
   let {
     config,
     shapes = [],
-    onmove,
-  }: { config: Config; shapes?: DrawShape[]; onmove: (orig: Key, dest: Key) => void } = $props()
+    onmove = () => {},
+  }: { config: Config; shapes?: DrawShape[]; onmove?: (orig: Key, dest: Key) => void } = $props()
 
   let el: HTMLDivElement
   let api: Api | undefined
@@ -23,7 +23,13 @@
       premovable: { enabled: false },
       movable: { free: false, showDests: true, events: { after: (orig, dest) => onmove(orig, dest) } },
     })
-    return () => api?.destroy()
+    // chessground caches its bounds; redraw when the board is shown again or resized.
+    const resize = new ResizeObserver(() => api?.redrawAll())
+    resize.observe(el)
+    return () => {
+      resize.disconnect()
+      api?.destroy()
+    }
   })
 
   // chessground diffs internally, so re-applying an unchanged position is cheap.
