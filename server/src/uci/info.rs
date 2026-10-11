@@ -1,8 +1,10 @@
 use std::{ops::Neg, str::FromStr, str::SplitAsciiWhitespace};
 
+use serde::Serialize;
 use shakmaty::{Color, uci::UciMove};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Score {
     Cp(i32),
     Mate(i32),
@@ -19,7 +21,8 @@ impl Neg for Score {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Bound {
     #[default]
     Exact,
