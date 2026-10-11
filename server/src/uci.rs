@@ -3,6 +3,7 @@ pub mod info;
 use std::{
     fmt::{self, Display, Write as _},
     io,
+    path::Path,
     process::Stdio,
     time::Duration,
 };
@@ -20,6 +21,7 @@ const MAX_LINE: usize = 64 * 1024;
 /// A running UCI engine. Dropping it kills the engine's whole process group.
 pub struct Engine {
     pub name: String,
+    pub author: String,
     stdin: ChildStdin,
     lines: mpsc::UnboundedReceiver<String>,
     pgid: libc::pid_t,
@@ -28,33 +30,44 @@ pub struct Engine {
 
 impl Engine {
     /// Spawns the engine in its own process group and completes the `uci`/`uciok` handshake.
-    pub async fn start(program: &str, args: &[String], limit: Duration) -> io::Result<Self> {
-        let mut child = Command::new(program)
+    pub async fn start(
+        program: &str,
+        args: &[String],
+        cwd: Option<&Path>,
+        limit: Duration,
+    ) -> io::Result<Self> {
+        let mut command = Command::new(program);
+        command
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .process_group(0)
-            .spawn()?;
+            .process_group(0);
+        if let Some(cwd) = cwd {
+            command.current_dir(cwd);
+        }
+        let mut child = command.spawn()?;
         let pgid = child.id().expect("unreaped child has a pid") as libc::pid_t;
         let (tx, lines) = mpsc::unbounded_channel();
         tokio::spawn(drain(child.stdout.take().expect("stdout is piped"), tx));
         let mut engine = Self {
             name: String::new(),
+            author: String::new(),
             stdin: child.stdin.take().expect("stdin is piped"),
             lines,
             pgid,
             _child: child,
         };
         engine.send("uci").await?;
-        engine.name = timeout(limit, async {
-            let mut name = String::new();
+        timeout(limit, async {
             loop {
                 let line = engine.recv().await.ok_or_else(exited)?;
                 if line == "uciok" {
-                    return Ok::<_, io::Error>(name);
+                    return Ok::<_, io::Error>(());
                 }
-                if let Some(id) = line.strip_prefix("id name ") {
-                    name = id.to_owned();
+                if let Some(name) = line.strip_prefix("id name ") {
+                    engine.name = name.to_owned();
+                } else if let Some(author) = line.strip_prefix("id author ") {
+                    engine.author = author.to_owned();
                 }
             }
         })

@@ -18,7 +18,7 @@ const START: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const SECOND: Duration = Duration::from_secs(1);
 
 async fn stockfish(threads: usize, hash_mb: usize) -> Option<Engine> {
-    let mut engine = match Engine::start("stockfish", &[], 5 * SECOND).await {
+    let mut engine = match Engine::start("stockfish", &[], None, 5 * SECOND).await {
         Ok(engine) => engine,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             eprintln!("stockfish not on PATH, skipping");

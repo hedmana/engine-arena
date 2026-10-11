@@ -22,8 +22,11 @@ use shakmaty::{Chess, san::SanPlus, uci::UciMove};
 use tokio::time::{Instant, sleep_until};
 use tower_http::services::{ServeDir, ServeFile};
 
+mod api;
+
 use crate::{
     analysis::{Analyzer, EngineOptions, Snapshot},
+    engines::Registry,
     uci::{
         GamePosition,
         info::{Bound, Score},
@@ -36,13 +39,15 @@ const MAX_MULTIPV: u32 = 8;
 
 pub struct AppState {
     analyzer: Option<Analyzer>,
+    registry: Registry,
     generations: AtomicU64,
 }
 
 impl AppState {
-    pub fn new(analyzer: Option<Analyzer>) -> Self {
+    pub fn new(analyzer: Option<Analyzer>, registry: Registry) -> Self {
         Self {
             analyzer,
+            registry,
             generations: AtomicU64::new(0),
         }
     }
@@ -52,6 +57,7 @@ pub fn router(state: AppState, web_dist: &str) -> Router {
     let spa = ServeDir::new(web_dist).fallback(ServeFile::new(format!("{web_dist}/index.html")));
     Router::new()
         .route("/ws", get(ws))
+        .merge(api::routes())
         .fallback_service(spa)
         .layer(middleware::from_fn(loopback_only))
         .with_state(Arc::new(state))
