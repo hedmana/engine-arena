@@ -39,6 +39,15 @@ export class AnalysisSocket {
     this.send(this.request)
   }
 
+  /** Generation of the latest `analyze` request; results for older ones are stale. */
+  get generation() {
+    return this.gen
+  }
+
+  options(threads: number, hashMb: number) {
+    this.send(JSON.stringify({ type: 'options', threads, hashMb }))
+  }
+
   stop() {
     this.request = undefined
     this.send('{"type":"stop"}')

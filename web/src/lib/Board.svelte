@@ -2,12 +2,17 @@
   import { Chessground } from 'chessground'
   import type { Api } from 'chessground/api'
   import type { Config } from 'chessground/config'
+  import type { DrawShape } from 'chessground/draw'
   import type { Key } from 'chessground/types'
   import 'chessground/assets/chessground.base.css'
   import 'chessground/assets/chessground.brown.css'
   import 'chessground/assets/chessground.cburnett.css'
 
-  let { config, onmove }: { config: Config; onmove: (orig: Key, dest: Key) => void } = $props()
+  let {
+    config,
+    shapes = [],
+    onmove,
+  }: { config: Config; shapes?: DrawShape[]; onmove: (orig: Key, dest: Key) => void } = $props()
 
   let el: HTMLDivElement
   let api: Api | undefined
@@ -23,6 +28,7 @@
 
   // chessground diffs internally, so re-applying an unchanged position is cheap.
   $effect(() => api?.set(config))
+  $effect(() => api?.setAutoShapes(shapes))
 </script>
 
 <div class="board" bind:this={el}></div>
