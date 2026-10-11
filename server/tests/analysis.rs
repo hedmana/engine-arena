@@ -5,11 +5,14 @@ use std::{
 };
 
 use engine_arena::{
-    analysis::Analyzer,
+    analysis::{Analyzer, EngineOptions, Snapshot},
     uci::{Engine, GamePosition, info},
 };
 use shakmaty::{CastlingMode, Chess, Position, uci::UciMove};
-use tokio::time::{sleep, timeout};
+use tokio::{
+    sync::watch,
+    time::{sleep, timeout},
+};
 
 const START: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const SECOND: Duration = Duration::from_secs(1);
@@ -92,6 +95,58 @@ async fn rapid_switches_analyze_only_the_last_position() {
     })
     .await
     .expect("deep analysis of the last position");
+}
+
+async fn changes_within(snapshots: &mut watch::Receiver<Snapshot>, within: Duration) -> bool {
+    timeout(within, snapshots.changed()).await.is_ok()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_is_generation_scoped_and_configure_resumes() {
+    let Some(engine) = stockfish(2, 64).await else {
+        return;
+    };
+    let analyzer = Analyzer::new(engine);
+    let mut snapshots = analyzer.subscribe();
+    let quiet = Duration::from_millis(300);
+
+    analyzer.analyze(1, GamePosition::new(START, &[] as &[&str]).unwrap(), 1);
+    analyzer.stop(0);
+    assert!(
+        changes_within(&mut snapshots, SECOND).await,
+        "stale stop must not stop generation 1"
+    );
+
+    analyzer.stop(1);
+    sleep(Duration::from_millis(50)).await;
+    snapshots.borrow_and_update();
+    assert!(
+        !changes_within(&mut snapshots, quiet).await,
+        "stop(1) must stop generation 1"
+    );
+
+    analyzer.configure(EngineOptions {
+        threads: 1,
+        hash_mb: 16,
+    });
+    assert!(
+        !changes_within(&mut snapshots, quiet).await,
+        "configure must not resume a stopped search"
+    );
+
+    analyzer.analyze(2, GamePosition::new(START, &["e2e4"]).unwrap(), 1);
+    assert!(changes_within(&mut snapshots, SECOND).await);
+    analyzer.configure(EngineOptions {
+        threads: 2,
+        hash_mb: 32,
+    });
+    sleep(Duration::from_millis(100)).await;
+    snapshots.borrow_and_update();
+    assert!(
+        changes_within(&mut snapshots, SECOND).await,
+        "configure must resume generation 2"
+    );
+    assert_eq!(snapshots.borrow().generation, 2);
 }
 
 #[tokio::test(flavor = "multi_thread")]
