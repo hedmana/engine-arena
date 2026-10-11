@@ -23,9 +23,11 @@ use tokio::time::{Instant, sleep_until};
 use tower_http::services::{ServeDir, ServeFile};
 
 mod api;
+mod matches;
 
 use crate::{
     analysis::{Analyzer, EngineOptions, Snapshot},
+    arena::Arena,
     engines::Registry,
     uci::{
         GamePosition,
@@ -38,16 +40,18 @@ const MAX_MESSAGE: usize = 64 * 1024;
 const MAX_MULTIPV: u32 = 8;
 
 pub struct AppState {
-    analyzer: Option<Analyzer>,
-    registry: Registry,
+    analyzer: Option<Arc<Analyzer>>,
+    registry: Arc<Registry>,
+    arena: Arc<Arena>,
     generations: AtomicU64,
 }
 
 impl AppState {
     pub fn new(analyzer: Option<Analyzer>, registry: Registry) -> Self {
         Self {
-            analyzer,
-            registry,
+            analyzer: analyzer.map(Arc::new),
+            registry: Arc::new(registry),
+            arena: Arc::default(),
             generations: AtomicU64::new(0),
         }
     }
@@ -58,6 +62,7 @@ pub fn router(state: AppState, web_dist: &str) -> Router {
     Router::new()
         .route("/ws", get(ws))
         .merge(api::routes())
+        .merge(matches::routes())
         .fallback_service(spa)
         .layer(middleware::from_fn(loopback_only))
         .with_state(Arc::new(state))

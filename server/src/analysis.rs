@@ -104,6 +104,7 @@ enum Command {
     Analyze(Request),
     Stop { generation: u64 },
     Configure(EngineOptions),
+    Pause(bool),
 }
 
 /// Runs infinite analysis on one engine. Only the newest request is ever searched:
@@ -145,6 +146,11 @@ impl Analyzer {
         let _ = self.commands.send(Command::Configure(options));
     }
 
+    /// While paused no search runs, so matches get the cores; resuming continues the newest request.
+    pub fn pause(&self, paused: bool) {
+        let _ = self.commands.send(Command::Pause(paused));
+    }
+
     pub fn subscribe(&self) -> watch::Receiver<Snapshot> {
         self.snapshot.clone()
     }
@@ -163,6 +169,7 @@ async fn run(
     let mut current: Option<Request> = None;
     let mut pending: Option<Request> = None;
     let mut options = None;
+    let mut paused = false;
     loop {
         tokio::select! {
             command = commands.recv() => {
@@ -178,8 +185,14 @@ async fn run(
                     }
                     Some(Command::Stop { .. }) => {}
                     Some(Command::Configure(o)) => options = Some(o),
+                    Some(Command::Pause(p)) => {
+                        paused = p;
+                        if !paused && pending.is_none() && wanted.is_some() {
+                            pending = current.take();
+                        }
+                    }
                 }
-                let superseded = pending.is_some() || options.is_some() || wanted.is_none();
+                let superseded = pending.is_some() || options.is_some() || wanted.is_none() || paused;
                 if searching && !stopping && superseded {
                     engine.send("stop").await?;
                     stopping = true;
@@ -195,7 +208,7 @@ async fn run(
                 }
             }
         }
-        if searching {
+        if searching || paused {
             continue;
         }
         if let Some(EngineOptions { threads, hash_mb }) = options.take() {
