@@ -30,6 +30,12 @@ export class Engine {
     else this.socket.stop()
   }
 
+  /** Stops analysis while the board is not shown. */
+  suspend() {
+    this.incoming = undefined
+    this.socket.stop()
+  }
+
   configure() {
     this.socket.options(this.threads, this.hashMb)
   }
